@@ -1,0 +1,161 @@
+---
+title: "team"
+author: "Zack Johnson"
+date: "11/8/2020"
+output: html_document
+---
+
+## Data and Libraries
+```{r}
+library(readxl)
+library(bbplot)
+library(tidyverse)
+library(ggthemes)
+library(lubridate)
+library(plyr)
+acc <- read.csv("https://raw.githubusercontent.com/DS202-at-ISU/labs/master/data/fars2016/accident.csv", stringsAsFactors = FALSE)
+person <- read.csv("https://raw.githubusercontent.com/DS202-at-ISU/labs/master/data/fars2016/person.csv", stringsAsFactors = F)
+names(acc)
+```
+
+### Exercise 1
+Yes it looks as though Fridays and Saturdays have the most which makes sense as people are probably driving places that are not their normal commute as much.
+```{r}
+ex1 <- acc %>%
+  mutate(DAY_WEEK = mapvalues(DAY_WEEK, from = c(1,2,3,4,5,6,7), to = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))) %>%
+  mutate(DAY_WEEK = factor(DAY_WEEK, levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))) %>%
+  group_by(DAY_WEEK) %>%
+  dplyr::summarise(n = n())
+
+ggplot(ex1, aes(x = DAY_WEEK, y = n, fill = DAY_WEEK)) + geom_bar(stat = 'identity') + 
+  labs(x = "Day", y = "Number of Accidents")
+```
+
+### Exercise 2
+```{r}
+sev_inj <- person %>%
+  filter(INJ_SEV == 4)
+head(sev_inj)
+```
+
+### Exercise 3
+```{r}
+dangerous_makes <- sev_inj %>%
+  filter(!is.na(MAKE)) %>%
+  group_by(STATE, MAKE) %>%
+  dplyr::summarise(fatalities = n()) %>%
+  filter(fatalities == max(fatalities))
+head(dangerous_makes)
+```
+
+### Exercise 4
+The definition of the most dangerous vehicle is the one with the most amount of severe accidents. Chevrolet and Ford show up the most. This way of measuring it could just bring up the cars that are most bought.
+```{r}
+glc <- read_xlsx("~/ds202/lab5/FRPP_GLC_-_United_StatesSep292020.xlsx")
+states <- map_data('state')
+glc_new <- glc %>%
+  mutate(`State Code` = as.numeric(`State Code`)) %>%
+  select(`State Code`, `State Name`, `County Name`, `County Code`) %>%
+  inner_join(dangerous_makes, by = c("State Code" = "STATE")) %>%
+  distinct() %>%
+  mutate(`State Name` = tolower(`State Name`)) %>%
+  right_join(states, by = c("State Name" = "region"))
+
+glc_map_data <- glc_new %>%
+  group_by(`State Name`) %>%
+  dplyr::summarise(long = mean(long), lat = mean(lat), make = min(MAKE)) %>%
+  mutate(make = factor(make, levels = c(12, 20, 49, 37, 35), 
+                     labels = c("Ford", "Chevrolet", "Toyota", "Honda", "Datsun/Nissan")))
+
+ggplot(data = states %>% group_by(region), aes(x = long, y = lat)) +
+  geom_polygon(aes(group = group)) +
+  geom_text(data = glc_map_data, aes(label = make), size = 2, color = 'white') +
+  theme_void()
+```
+
+## Exercise 5
+```{r}
+acc_people <- full_join(acc, person) %>%
+  select(STATE, COUNTY, CITY, MONTH, DAY, DAY_WEEK, YEAR, HOUR, MINUTE, LATITUDE, LONGITUD, FATALS, AGE, SEX, PER_TYP, INJ_SEV)
+str(acc_people)
+```
+
+## Exercise 6
+```{r}
+acc_people <- acc_people %>%
+  filter(SEX != 8 & SEX != 9) %>%
+  filter(HOUR <= 24) %>%
+  group_by(DAY_WEEK, HOUR, SEX) %>%
+  dplyr::summarize(total = n())
+table(acc_people$SEX)
+acc_people$SEX <- mapvalues(acc_people$SEX, from = c(1,2,8,9), to = c("Male", "Female", NA, NA))
+acc_people$DAY_WEEK <- factor(acc_people$DAY_WEEK, labels = c("Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"))
+ggplot(acc_people, aes(x = HOUR, y = total, fill = SEX)) + facet_grid(DAY_WEEK~.) + geom_bar(stat = 'identity') +
+  scale_fill_manual(values=c("blue", "pink")) +
+  labs(x = "Hour of the Day", y = "# of Accidents")
+```
+
+## Exercise 7
+```{r}
+county <- map_data("county")
+glc$`State Name` <- tolower(glc$`State Name`)
+glc$`County Name` <- tolower(glc$`County Name`)
+
+countyData <- county %>% left_join(glc, by = c("region" = "State Name", "subregion" = "County Name"))
+
+countyData$`County Code` <- as.numeric(countyData$`County Code`)
+countyData$`State Code` <- as.numeric(countyData$`State Code`)
+
+deaths_county <- acc %>%
+  group_by(STATE, COUNTY) %>%
+  dplyr::summarize(total = n())
+
+deaths_county <- deaths_county %>% right_join(countyData, by = c('COUNTY' = 'County Code', 'STATE'= 'State Code'))
+
+
+ggplot(deaths_county, aes(x = long, y = lat, fill = total)) + 
+  geom_polygon(aes(group = group)) + 
+  geom_path(data = states, aes(x = long, y = lat, group = group), inherit.aes=FALSE, size= 0.5, color='black') +
+  ggtitle('Fatal Accidents by County and State') + coord_map()
+```
+
+## Exercise 8
+It looks like summer is more dangerous. This is not what I was expecting but I think I see why this would be. While the winter's driving conditions may be more dangerous, there are probably more drivers around in the summer as people avoid driving in the winter. This would make for more accidents having potential to happen. I would be interested to see accidents per average amount of drivers on the road.
+```{r}
+stateCodes <- read.csv("~/ds202/lab5/stateCodes.csv")
+df1 <- acc %>%
+  filter(MONTH %in% c(6,7,8)) %>%
+  group_by(STATE) 
+df1 <- df1 %>%
+  dplyr::summarise(n = nrow(df1))
+df1 <- inner_join(df1, stateCodes, by = c("STATE" = "Codes"))
+df1$season <- 'summer'
+
+df2 <- acc %>%
+  filter(MONTH %in% c(12,1,2)) %>%
+  group_by(STATE)
+df2 <- df2 %>%
+  dplyr::summarise(n = nrow(df2))
+df2 <- inner_join(df2, stateCodes, by = c("STATE" = "Codes"))
+df2$season <- 'winter'
+
+df3 <- rbind(df1, df2)
+
+ggplot(df3 ,aes(x = season, y = n, fill = season)) +
+  geom_bar(stat='identity') +
+  ggtitle("Accdients by Season for all States")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
